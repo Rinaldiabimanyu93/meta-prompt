@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { type FormData, type ParsedOutput } from "../types";
 import { SYSTEM_PROMPT } from '../constants';
@@ -63,13 +62,42 @@ function parseGeminiResponse(responseText: string): ParsedOutput {
     const jsonMatch = responseText.match(jsonRegex);
     let uiSpec = "";
     if (jsonMatch && jsonMatch[1]) {
+        let jsonString = jsonMatch[1];
+        
+        // Isolate the core JSON object/array to remove potential surrounding text from the LLM.
+        const firstBracketIndex = jsonString.indexOf('{');
+        const firstSquareBracketIndex = jsonString.indexOf('[');
+        
+        let startIndex = -1;
+        if (firstBracketIndex === -1) {
+            startIndex = firstSquareBracketIndex;
+        } else if (firstSquareBracketIndex === -1) {
+            startIndex = firstBracketIndex;
+        } else {
+            startIndex = Math.min(firstBracketIndex, firstSquareBracketIndex);
+        }
+
+        if (startIndex !== -1) {
+             const lastBracketIndex = jsonString.lastIndexOf('}');
+             const lastSquareBracketIndex = jsonString.lastIndexOf(']');
+             const endIndex = Math.max(lastBracketIndex, lastSquareBracketIndex);
+
+             if (endIndex > startIndex) {
+                 jsonString = jsonString.substring(startIndex, endIndex + 1);
+             }
+        }
+        
         try {
-            const parsedJson = JSON.parse(jsonMatch[1]);
+            // Use a lenient parsing method to handle common LLM formatting quirks like
+            // trailing commas, comments, and unquoted keys. This is safer than eval.
+            const parsedJson = new Function(`return ${jsonString}`)();
             uiSpec = JSON.stringify(parsedJson, null, 2);
         } catch (e) {
             console.error("Failed to parse UI Spec JSON:", e);
-            uiSpec = "Error: Invalid JSON in response.";
+            uiSpec = `Error: Invalid JSON in response. Automatic parsing failed.\n\nContent that failed parsing:\n${jsonString}`;
         }
+    } else {
+        uiSpec = "UI Spec JSON not found in the response.";
     }
     
     const techniquesRegex = /Teknik Terpilih:\s*(.*)/;
@@ -119,13 +147,56 @@ export const generateMetaPrompt = async (formData: FormData): Promise<ParsedOutp
 
     const responseText = response.text;
     if (!responseText) {
-        throw new Error("Received an empty response from the API.");
+        const candidate = response.candidates?.[0];
+        if (candidate) {
+            const { finishReason, safetyRatings } = candidate;
+            if (finishReason === 'SAFETY') {
+                const blockedCategories = safetyRatings?.filter(r => r.blocked).map(r => r.category.replace('HARM_CATEGORY_', '')).join(', ');
+                throw new Error(`Request blocked for safety reasons. Blocked categories: ${blockedCategories || 'Unknown'}. Please adjust your input.`);
+            }
+            if (finishReason === 'RECITATION') {
+                throw new Error("Request blocked due to potential recitation. The model's response would have been too similar to a source on the web. Please try a different prompt.");
+            }
+             if (finishReason === 'MAX_TOKENS') {
+                throw new Error("The response was stopped because it reached the maximum token limit. Try asking for a shorter response.");
+            }
+            if (finishReason) {
+                 throw new Error(`The request was stopped for the following reason: ${finishReason}. Please adjust your input and try again.`);
+            }
+        }
+        throw new Error("Received an empty response from the API. This could be due to content filters or a lack of a specific answer from the model.");
     }
     
     return parseGeminiResponse(responseText);
 
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    throw new Error("Failed to generate prompt. Please check the console for details.");
+    if (error instanceof Error) {
+        // Re-throw the more specific errors from the try block
+        if (error.message.startsWith('Request blocked') || error.message.startsWith('The response was stopped') || error.message.startsWith('Received an empty response')) {
+            throw error;
+        }
+
+        const message = error.message.toLowerCase();
+        if (message.includes('api key not valid')) {
+            throw new Error('The API key is invalid. Please ensure it is correctly configured in your environment.');
+        }
+        if (message.includes('429') || message.includes('resource exhausted')) {
+            throw new Error('You have exceeded your request quota. Please wait a moment and try again.');
+        }
+        if (message.includes('500') || message.includes('internal error')) {
+            throw new Error('The AI service encountered an internal error. Please try again later.');
+        }
+         if (message.includes('400') || message.includes('invalid argument')) {
+            throw new Error('The request sent to the AI service was malformed. Please check the input.');
+        }
+        if(message.includes('fetch failed') || message.includes('network error')) {
+            throw new Error('A network error occurred. Please check your internet connection and try again.');
+        }
+        
+        throw new Error(`An API error occurred: ${error.message}`);
+    }
+
+    throw new Error("An unexpected error occurred while communicating with the API.");
   }
 };

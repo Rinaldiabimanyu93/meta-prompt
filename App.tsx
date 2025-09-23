@@ -1,11 +1,10 @@
-
 import React, { useState, useCallback, useMemo } from 'react';
 import { FORM_STEPS } from './constants';
 import { type FormData, type ParsedOutput } from './types';
 import { generateMetaPrompt } from './services/geminiService';
 import Step from './components/Step';
 import Preview from './components/Preview';
-import { LoaderIcon } from './components/icons';
+import { LoaderIcon, AlertTriangleIcon } from './components/icons';
 
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
@@ -87,9 +86,12 @@ const App: React.FC = () => {
           </div>
 
           {error && (
-            <div className="bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg relative mb-6" role="alert">
-              <strong className="font-bold">Error: </strong>
-              <span className="block sm:inline">{error}</span>
+            <div className="bg-red-900/50 border border-red-600 text-red-200 px-4 py-3 rounded-lg relative mb-6 flex items-start space-x-3" role="alert">
+              <AlertTriangleIcon className="h-5 w-5 text-red-400 mt-1 flex-shrink-0" />
+              <div>
+                <strong className="font-bold">An error occurred</strong>
+                <span className="block mt-1">{error}</span>
+              </div>
             </div>
           )}
 
